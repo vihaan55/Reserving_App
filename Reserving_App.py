@@ -19,10 +19,7 @@ tab1, tab2 = st.tabs(["📁 Upload File", "✏️ Manual Input"])
 
 # Tab 1: File Upload
 with tab1:
-    st.markdown("""
-    Upload file with: Accident_Year, Development_Lag, Amount
-    (Premium optional)
-    """)
+    st.markdown("Upload: Accident_Year, Development_Lag, Amount (Premium optional)")
     
     uploaded = st.file_uploader("Upload File", type=['xlsx', 'xls', 'csv'])
     
@@ -35,11 +32,9 @@ with tab1:
             
             st.subheader("Raw Data")
             st.dataframe(df.head(), width='stretch')
-            st.write("Columns:", df.columns.tolist())
             
             # Find columns
-            ay_col, lag_col, amount_col = None, None, None
-            prem_col = None
+            ay_col, lag_col, amount_col, prem_col = None, None, None, None
             
             for c in df.columns:
                 c_lower = c.lower()
@@ -55,23 +50,22 @@ with tab1:
             if ay_col and lag_col and amount_col:
                 # Group and pivot
                 triangle_raw = df.groupby([ay_col, lag_col])[amount_col].sum().reset_index()
-                
-                # Pivot
                 triangle_pivot = triangle_raw.pivot(
                     index=ay_col, 
                     columns=lag_col, 
                     values=amount_col
                 ).fillna(0)
                 
-                # Add Premium if exists
+                # Add Premium separately (not from pivot!)
                 if prem_col:
                     premiums = df.groupby(ay_col)[prem_col].first().reset_index()
+                    premiums.columns = ['Accident_Year', 'Premium']
                     triangle_pivot = triangle_pivot.reset_index().merge(premiums, on=ay_col, how='left')
                 else:
                     triangle_pivot = triangle_pivot.reset_index()
                     triangle_pivot['Premium'] = 1500000
                 
-                # Rename columns properly
+                # Rename columns
                 new_cols = ['Accident_Year', 'Premium']
                 for c in triangle_pivot.columns[2:]:
                     try:
@@ -83,7 +77,7 @@ with tab1:
                 triangle_pivot.columns = new_cols
                 
                 st.session_state.triangle = triangle_pivot
-                st.success(f"✓ Loaded!")
+                st.success("✓ Loaded!")
                 st.subheader("Triangle")
                 st.dataframe(triangle_pivot, width='stretch')
             else:
@@ -114,8 +108,23 @@ with tab2:
         cols = ['Accident_Year', 'Premium'] + [f'Lag_{l}' for l in lags]
         st.session_state.triangle = pd.DataFrame(sample[:len(ays)], columns=cols)
     
+    # Ensure columns match valuation_lag
+    triangle_df = st.session_state.triangle.copy()
+    
+    # Fill missing columns with 0
+    for lag in lags:
+        if f'Lag_{lag}' not in triangle_df.columns:
+            triangle_df[f'Lag_{lag}'] = 0
+    
+    # Select only needed columns
+    needed_cols = ['Accident_Year', 'Premium'] + [f'Lag_{l}' for l in lags]
+    triangle_df = triangle_df[needed_cols]
+    
+    # Remove duplicates
+    triangle_df = triangle_df.loc[:, ~triangle_df.columns.duplicated()]
+    
     triangle_df = st.data_editor(
-        st.session_state.triangle,
+        triangle_df,
         column_config={
             "Accident_Year": st.column_config.NumberColumn("Year", disabled=True),
             "Premium": st.column_config.NumberColumn("Premium", format="$"),
