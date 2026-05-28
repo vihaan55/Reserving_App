@@ -19,18 +19,12 @@ tab1, tab2 = st.tabs(["📁 Upload File", "✏️ Manual Input"])
 
 # Tab 1: File Upload
 with tab1:
-    st.markdown("""
-    **Upload file** with columns:
-    - `Accident_Year` (or `AY`, `Year`)
-    - `Premium` (optional)
-    - `Lag_0`, `Lag_3`, `Lag_6`, etc.
-    """)
+    st.markdown("Upload file with columns: Accident_Year, Premium, Lag_0, Lag_3,...")
     
     uploaded = st.file_uploader("Upload File", type=['xlsx', 'xls', 'csv'])
     
     if uploaded is not None:
         try:
-            # Read file - Pandas handles Excel internally
             if uploaded.name.endswith('.csv'):
                 df = pd.read_csv(uploaded)
             else:
@@ -39,27 +33,23 @@ with tab1:
             st.subheader("Preview")
             st.dataframe(df.head(), width='stretch')
             
-            # Clean columns
-            df.columns = df.columns.str.strip().str.replace('\n', '').str.replace('\r', '')
+            # Clean column names - replace spaces with underscores
+            df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace('\n', '').str.replace('\r', '')
             
-            # Standardize column names
-            col_map = {}
+            # Standardize AY column
             for c in df.columns:
                 if 'accident' in c.lower() or c.lower() in ['ay', 'year']:
-                    col_map[c] = 'Accident_Year'
+                    df = df.rename(columns={c: 'Accident_Year'})
             
-            if col_map:
-                df = df.rename(columns=col_map)
-            
-            # Find lag columns
+            # Find lag columns (more flexible matching)
             lag_cols = []
             for c in df.columns:
-                if 'lag' in c.lower():
-                    try:
-                        lag_num = int(''.join(filter(str.isdigit, c)))
-                        lag_cols.append((c, lag_num))
-                    except:
-                        pass
+                c_lower = c.lower()
+                if 'lag' in c_lower:
+                    # Extract numbers from column name
+                    nums = ''.join(filter(str.isdigit, c))
+                    if nums:
+                        lag_cols.append((c, int(nums)))
             
             lag_cols.sort(key=lambda x: x[1])
             lag_cols = [c[0] for c in lag_cols]
@@ -72,9 +62,10 @@ with tab1:
             
             st.session_state.triangle = df[keep].copy()
             st.success(f"✓ Loaded {len(df)} accident years!")
+            st.write("Columns found:", st.session_state.triangle.columns.tolist())
             
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"Error: {e}")
 
 # Tab 2: Manual
 with tab2:
@@ -126,7 +117,20 @@ with tab2:
 
 # Calculations
 def calc_cl(triangle):
-    lags = sorted([int(c.split('_')[1]) for c in triangle.columns if 'Lag' in c])
+    # Find lag columns more robustly
+    lag_cols = []
+    for c in triangle.columns:
+        if 'lag' in c.lower():
+            try:
+                lag_num = int(''.join(filter(str.isdigit, c)))
+                lag_cols.append(lag_num)
+            except:
+                pass
+    
+    if not lag_cols:
+        return {'reserves': [], 'ultimates': [], 'ldfs': {}, 'error': 'No lag columns found'}
+    
+    lags = sorted(lag_cols)
     ldfs, reserves, ultimates = {}, [], []
     
     for i in range(len(lags)-1):
@@ -159,32 +163,41 @@ def calc_bf(triangle, elr):
 
 # Run
 if st.button("🚀 RUN RESERVING MODEL", type="primary", width='stretch'):
-    cl = calc_cl(triangle_df)
-    bf = calc_bf(triangle_df, expected_lr)
-    
-    blend_r = [(cl['reserves'][i] + bf['reserves'][i])/2 for i in range(len(triangle_df))]
-    blend_u = [(cl['ultimates'][i] + bf['ultimates'][i])/2 for i in range(len(triangle_df))]
-    
-    results = pd.DataFrame({
-        'Accident_Year': triangle_df['Accident_Year'],
-        'Chain_Ladder': [f"${r:,.0f}" for r in cl['reserves']],
-        'BF': [f"${r:,.0f}" for r in bf['reserves']],
-        '50_50': [f"${r:,.0f}" for r in blend_r],
-        'Ultimate': [f"${u:,.0f}" for u in blend_u]
-    })
-    
-    st.subheader("Results by Accident Year")
-    st.dataframe(results, width='stretch')
-    
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("CL Total", f"${sum(cl['reserves']):,.0f}")
-    c2.metric("BF Total", f"${sum(bf['reserves']):,.0f}")
-    c3.metric("50/50 Total", f"${sum(blend_r):,.0f}")
-    c4.metric("Ultimate", f"${sum(blend_u):,.0f}")
-    
-    if cl['ldfs']:
-        st.subheader("Development Factors")
-        ldf_df = pd.DataFrame(list(cl['ldfs'].items()), columns=['Period', 'Factor'])
-        st.dataframe(ldf_df, width='stretch')
-    
-    st.download_button("Download CSV", results.to_csv(index=False), "reserves.csv")
+    # Check if triangle has data
+    if triangle_df.empty:
+        st.error("No data! Please upload a file or enter data manually.")
+    else:
+        cl = calc_cl(triangle_df)
+        bf = calc_bf(triangle_df, expected_lr)
+        
+        # Check for errors
+        if 'error' in cl:
+            st.error(cl['error'])
+            st.write("Available columns:", triangle_df.columns.tolist())
+        else:
+            blend_r = [(cl['reserves'][i] + bf['reserves'][i])/2 for i in range(len(triangle_df))]
+            blend_u = [(cl['ultimates'][i] + bf['ultimates'][i])/2 for i in range(len(triangle_df))]
+            
+            results = pd.DataFrame({
+                'Accident_Year': triangle_df['Accident_Year'],
+                'Chain_Ladder': [f"${r:,.0f}" for r in cl['reserves']],
+                'BF': [f"${r:,.0f}" for r in bf['reserves']],
+                '50_50': [f"${r:,.0f}" for r in blend_r],
+                'Ultimate': [f"${u:,.0f}" for u in blend_u]
+            })
+            
+            st.subheader("Results by Accident Year")
+            st.dataframe(results, width='stretch')
+            
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("CL Total", f"${sum(cl['reserves']):,.0f}")
+            c2.metric("BF Total", f"${sum(bf['reserves']):,.0f}")
+            c3.metric("50/50 Total", f"${sum(blend_r):,.0f}")
+            c4.metric("Ultimate", f"${sum(blend_u):,.0f}")
+            
+            if cl['ldfs']:
+                st.subheader("Development Factors")
+                ldf_df = pd.DataFrame(list(cl['ldfs'].items()), columns=['Period', 'Factor'])
+                st.dataframe(ldf_df, width='stretch')
+            
+            st.download_button("Download CSV", results.to_csv(index=False), "reserves.csv")
