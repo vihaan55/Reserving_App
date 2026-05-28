@@ -45,47 +45,50 @@ with tab1:
                 elif 'amount' in c_lower or 'claim' in c_lower:
                     amount_col = c
             
-            st.write(f"Found: AY={ay_col}, Lag={lag_col}, Amount={amount_col}")
-            
             if ay_col and lag_col and amount_col:
                 # Aggregate amounts by AY and Lag
                 grouped = df.groupby([ay_col, lag_col])[amount_col].sum().reset_index()
                 
                 # Pivot to create triangle
                 triangle = grouped.pivot(index=ay_col, columns=lag_col, values=amount_col).fillna(0)
-                
-                # Reset index and rename
                 triangle = triangle.reset_index()
                 triangle = triangle.rename(columns={ay_col: 'Accident_Year'})
                 
-                # Ensure all lag columns exist
+                # Add all lag columns
                 all_lags = [0, 3, 6, 12, 24, 36, 48]
                 for lag in all_lags:
                     if lag not in triangle.columns:
                         triangle[lag] = 0
                 
-                # Sort columns properly (Accident_Year, Premium, then lags in order)
+                # Select needed columns
                 premium_cols = ['Accident_Year']
                 premium_cols += [l for l in all_lags if l in triangle.columns]
                 triangle = triangle[premium_cols]
                 
-                # Add default Premium if not exists
+                # Add Premium
                 if 'Premium' not in triangle.columns:
                     triangle['Premium'] = 1500000
                 
-                # Reorder to put Premium after Accident_Year
+                # Reorder
                 cols = ['Accident_Year', 'Premium'] + [c for c in triangle.columns if c not in ['Accident_Year', 'Premium']]
                 triangle = triangle[cols]
+                
+                # Rename to Lag_X format
+                new_cols = ['Accident_Year', 'Premium']
+                for c in triangle.columns[2:]:
+                    try:
+                        new_cols.append(f'Lag_{int(c)}')
+                    except:
+                        new_cols.append(str(c))
+                triangle.columns = new_cols
                 
                 st.session_state.triangle = triangle
                 st.success(f"✓ Loaded {len(triangle)} years!")
                 
                 st.subheader("Claims Triangle (Cumulative)")
                 st.dataframe(triangle, width='stretch')
-                
-                st.write("Columns:", triangle.columns.tolist())
             else:
-                st.error(f"Columns not found. Available: {df.columns.tolist()}")
+                st.error(f"Missing columns")
                 
         except Exception as e:
             st.error(f"Error: {e}")
@@ -125,7 +128,6 @@ with tab2:
 
 # Calculations
 def calc_cl(triangle):
-    # Find numeric lag columns only
     lag_cols = []
     for c in triangle.columns:
         if 'Lag_' in c:
@@ -142,7 +144,7 @@ def calc_cl(triangle):
     
     # Calculate LDFs
     ldfs = {}
-    for i in range(len(lag_cols)-1:
+    for i in range(len(lag_cols)-1):
         vals = []
         for idx in range(len(triangle)):
             c_val = triangle.loc[idx, f'Lag_{lag_cols[i]}']
@@ -174,7 +176,7 @@ def calc_bf(triangle, elr):
     for idx in range(len(triangle)):
         prem = triangle.loc[idx, 'Premium'] if 'Premium' in triangle.columns else 0
         if prem <= 0:
-            prem = 1500000  # Default
+            prem = 1500000
         ult = prem * elr
         reserves.append(ult * (1 - pct))
         ultimates.append(ult)
@@ -183,7 +185,7 @@ def calc_bf(triangle, elr):
 # Run
 if st.button("🚀 RUN RESERVING MODEL", type="primary", width='stretch'):
     if triangle_df is None or triangle_df.empty:
-        st.error("No data! Upload a file or enter manually.")
+        st.error("No data!")
     else:
         cl = calc_cl(triangle_df)
         bf = calc_bf(triangle_df, expected_lr)
@@ -194,7 +196,6 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", width='stretch'):
             blend_r = [(cl['reserves'][i] + bf['reserves'][i])/2 for i in range(len(triangle_df))]
             blend_u = [(cl['ultimates'][i] + bf['ultimates'][i])/2 for i in range(len(triangle_df))]
             
-            # Results table
             results = pd.DataFrame({
                 'Accident_Year': triangle_df['Accident_Year'],
                 'Premium': triangle_df['Premium'],
@@ -207,22 +208,18 @@ if st.button("🚀 RUN RESERVING MODEL", type="primary", width='stretch'):
                 '50_50_Ultimate': blend_u
             })
             
-            st.subheader("📊 Results by Accident Year")
+            st.subheader("Results by Accident Year")
             st.dataframe(results, width='stretch')
             
-            # Totals
-            st.subheader("Total Reserves (All Years)")
             c1,c2,c3,c4 = st.columns(4)
             c1.metric("CL Total", f"${sum(cl['reserves']):,.0f}")
             c2.metric("BF Total", f"${sum(bf['reserves']):,.0f}")
             c3.metric("50/50 Total", f"${sum(blend_r):,.0f}")
             c4.metric("Ultimate Total", f"${sum(blend_u):,.0f}")
             
-            # LDFs
             if cl['ldfs']:
-                st.subheader("Development Factors (LDFs)")
+                st.subheader("Development Factors")
                 ldf_df = pd.DataFrame(list(cl['ldfs'].items()), columns=['Period', 'Factor'])
                 st.dataframe(ldf_df, width='stretch')
             
-            # Download
             st.download_button("Download CSV", results.to_csv(index=False), "reserves.csv")
