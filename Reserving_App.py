@@ -20,84 +20,80 @@ tab1, tab2 = st.tabs(["📁 Upload File", "✏️ Manual Input"])
 # Tab 1: File Upload
 with tab1:
     st.markdown("""
-    Upload file with columns: 
-    - `Accident_Year` (or `AY`)
-    - `Development_Lag` 
-    - `Amount` (claim amount)
-    - `Premium` (optional)
+    Upload file with: Accident_Year, Development_Lag, Amount
+    (Premium optional)
     """)
     
     uploaded = st.file_uploader("Upload File", type=['xlsx', 'xls', 'csv'])
     
     if uploaded is not None:
         try:
-            # Read file
             if uploaded.name.endswith('.csv'):
                 df = pd.read_csv(uploaded)
             else:
                 df = pd.read_excel(uploaded)
             
-            st.subheader("Raw Data Preview")
+            st.subheader("Raw Data")
             st.dataframe(df.head(), width='stretch')
+            st.write("Columns:", df.columns.tolist())
             
-            # Clean column names
-            df.columns = df.columns.str.strip().str.replace(' ', '_')
-            
-            st.write("Columns found:", df.columns.tolist())
-            
-            # Find required columns
-            ay_col = None
-            lag_col = None
-            amount_col = None
+            # Find columns
+            ay_col, lag_col, amount_col = None, None, None
+            prem_col = None
             
             for c in df.columns:
                 c_lower = c.lower()
-                if 'accident' in c_lower or c_lower in ['ay', 'year']:
+                if 'accident' in c_lower or c_lower == 'year':
                     ay_col = c
                 elif 'development' in c_lower or c_lower == 'lag':
                     lag_col = c
                 elif 'amount' in c_lower or 'claim' in c_lower:
                     amount_col = c
+                elif 'premium' in c_lower or 'earned' in c_lower:
+                    prem_col = c
             
             if ay_col and lag_col and amount_col:
-                # Group by Accident Year and Development Lag, sum Amounts
+                # Group and pivot
                 triangle_raw = df.groupby([ay_col, lag_col])[amount_col].sum().reset_index()
-                triangle_raw.columns = ['Accident_Year', 'Development_Lag', 'Amount']
                 
-                # Pivot to create triangle
+                # Pivot
                 triangle_pivot = triangle_raw.pivot(
-                    index='Accident_Year', 
-                    columns='Development_Lag', 
-                    values='Amount'
+                    index=ay_col, 
+                    columns=lag_col, 
+                    values=amount_col
                 ).fillna(0)
                 
-                # Add Premium if available (or use default)
-                if 'Premium' in df.columns:
-                    premiums = df.groupby(ay_col)['Premium'].first().reset_index()
-                    premiums.columns = ['Accident_Year', 'Premium']
-                    triangle_pivot = triangle_pivot.reset_index().merge(premiums, on='Accident_Year', how='left')
+                # Add Premium if exists
+                if prem_col:
+                    premiums = df.groupby(ay_col)[prem_col].first().reset_index()
+                    triangle_pivot = triangle_pivot.reset_index().merge(premiums, on=ay_col, how='left')
                 else:
                     triangle_pivot = triangle_pivot.reset_index()
-                    triangle_pivot['Premium'] = 1500000  # Default
+                    triangle_pivot['Premium'] = 1500000
                 
-                # Rename columns to Lag_X format
-                triangle_pivot.columns = ['Accident_Year', 'Premium'] + [f'Lag_{int(c)}' for c in triangle_pivot.columns[2:]]
+                # Rename columns properly
+                new_cols = ['Accident_Year', 'Premium']
+                for c in triangle_pivot.columns[2:]:
+                    try:
+                        lag_num = int(float(c))
+                        new_cols.append(f'Lag_{lag_num}')
+                    except:
+                        new_cols.append(str(c))
+                
+                triangle_pivot.columns = new_cols
                 
                 st.session_state.triangle = triangle_pivot
-                st.success(f"✓ Loaded {len(triangle_pivot)} accident years!")
-                st.subheader("Transformed Triangle")
+                st.success(f"✓ Loaded!")
+                st.subheader("Triangle")
                 st.dataframe(triangle_pivot, width='stretch')
             else:
-                st.error(f"Missing columns! Found: {df.columns.tolist()}")
-                st.info("Required: Accident_Year, Development_Lag, Amount")
-            
+                st.error(f"Missing columns. Found: {df.columns.tolist()}")
+                
         except Exception as e:
             st.error(f"Error: {e}")
 
 # Tab 2: Manual
 with tab2:
-    st.markdown("Enter data in triangle format")
-    
     ay_input = st.text_input("Accident Years", "2021, 2022, 2023")
     prem_input = st.text_input("Premium ($)", "1200000, 1500000, 1800000")
     
@@ -127,22 +123,6 @@ with tab2:
         },
         width='stretch', hide_index=True
     )
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Add Year"):
-            new_ay = max(ays) + 1
-            new_row = pd.DataFrame({
-                'Accident_Year': [new_ay],
-                'Premium': [1500000],
-                **{f'Lag_{l}': [0] for l in lags}
-            })
-            st.session_state.triangle = pd.concat([st.session_state.triangle, new_row], ignore_index=True)
-            st.rerun()
-    with col2:
-        if st.button("Clear"):
-            st.session_state.triangle = pd.DataFrame({'Accident_Year': ays, 'Premium': prems, **{f'Lag_{l}': [0] for l in lags}})
-            st.rerun()
 
 # Calculations
 def calc_cl(triangle):
@@ -150,8 +130,9 @@ def calc_cl(triangle):
     for c in triangle.columns:
         if 'lag' in c.lower():
             try:
-                lag_num = int(''.join(filter(str.isdigit, c)))
-                lag_cols.append(lag_num)
+                nums = ''.join(filter(str.isdigit, c))
+                if nums:
+                    lag_cols.append(int(nums))
             except:
                 pass
     
